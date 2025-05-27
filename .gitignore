@@ -1,0 +1,72 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# PyInstaller
+*.spec
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+
+# Logs and local databases
+*.log
+*.sqlite3
+*.db
+
+# VS Code
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Docker
+*.pid
+*.tar
+docker-compose.override.yml
+
+# Pytest
+.cache/
+.pytest_cache/
+
+# MyPy, coverage
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# System files
+Thumbs.db
+desktop.ini
+
+# Spyder
+.spyderproject
+.spyproject
+
+# pipenv / poetry / pyenv
+Pipfile.lock
+poetry.lock
+python-version
+
+# Editor backups
+*~
+*.swp
+
+# Lint reports
+pylint-report.txt
+mypy-report.txt
+flake8.log
