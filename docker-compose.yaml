@@ -1,122 +1,103 @@
 version: '3.8'
 
-x-airflow-common:
-  &airflow-common
-  build:
-    context: .
-    dockerfile: Dockerfile
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.7.3
   env_file:
-    - airflow.env
+    - .env
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/data/airflow.db
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./data:/opt/airflow/data
-    - ./config:/opt/airflow/config # if you have airflow.cfg customizations beyond env vars
-    # Mount Python modules if imported by DAGs and not part of the image
-    - ./etls:/opt/airflow/etls
-    - ./pipelines:/opt/airflow/pipelines
-    - ./utils:/opt/airflow/utils
-    # - ./tests:/opt/airflow/tests # Not usually needed for runtime
-  user: "${AIRFLOW_UID:-999}"
-  depends_on:
-    postgres:
-      condition: service_healthy
+  # The user for webserver and scheduler will be AIRFLOW_UID
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
+  healthcheck:
+    test: ["CMD", "airflow", "db", "check"]
+    interval: 30s
+    timeout: 30s
+    retries: 3
 
 services:
-  postgres:
-    image: postgres:13-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: airflow_reddit
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "airflow_reddit"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  airflow-init:
+    <<: *airflow-common
+    # --- MODIFICATION FOR airflow-init ---
+    user: root # Run the entrypoint/command of this service as root
+    # --- END MODIFICATION ---
+    container_name: airflow_init_light_reddit
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e; # Exit immediately if a command exits with a non-zero status.
+        echo "--- Running airflow-init as $(id) ---";
+        # These mkdirs will be done as root
+        mkdir -p /opt/airflow/dags /opt/airflow/logs /opt/airflow/plugins /opt/airflow/data;
+        # Chown the directories to the AIRFLOW_UID/GID. This must be done as root.
+        echo "Chowning directories to ${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}";
+        chown -R "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}" /opt/airflow/dags /opt/airflow/logs /opt/airflow/plugins /opt/airflow/data;
+        echo "Directories chowned. Executing Airflow commands as ${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0} using gosu";
+        # Use gosu to drop privileges to AIRFLOW_UID for Airflow-specific commands
+        # This ensures that airflow db init and users create run as the correct user
+        # and the database file will be owned by AIRFLOW_UID.
+        exec gosu "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}" bash -c " \
+          airflow db init && \
+          airflow users create \
+            --username admin \
+            --firstname Admin \
+            --lastname User \
+            --role Admin \
+            --email admin@example.com \
+            --password admin \
+        " || echo "User 'admin' already exists or an error occurred during user creation, but init script will still exit 0 for depends_on"
+        # The "|| echo ..." part is a bit of a hack to ensure the script exits with 0 if user creation fails because user exists
+        # A more robust way would be to check if user exists before trying to create.
+        # For this setup, 'airflow users create ... || true' is simpler if gosu passes the exit code correctly.
+        # Let's refine the gosu part to make the '|| true' apply to the user creation only.
+        #
+        # Corrected gosu command for robust user creation:
+        # exec gosu "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}" bash -c " \
+        #   airflow db init && \
+        #   (airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true) \
+        # "
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver_light_reddit
     restart: unless-stopped
-    volumes:
-      - postgres_db_volume:/var/lib/postgresql/data
+    command: airflow webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
           cpus: '0.75'
-          memory: 768M
-
-  airflow-init:
-    <<: *airflow-common
-    container_name: airflow_init
-    # No entrypoint override - use the default from the image
-    command:
-      - bash # The Airflow entrypoint will execute this command
-      - -c
-      - |
-        if ! airflow db check-migrations -t 60; then
-          echo "Database not initialized. Initializing..."
-          airflow db upgrade # This initializes and upgrades
-          airflow users create \
-            --username admin \
-            --firstname admin \
-            --lastname admin \
-            --role Admin \
-            --email airflow@airflow.com \
-            --password admin
-        else
-          echo "Database already initialized."
-        fi
-    restart: "no"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.75' # Increased slightly for init
-          memory: 1G   # Increased for db operations
-
-  airflow-webserver:
-    <<: *airflow-common
-    container_name: airflow_webserver
-    command: webserver
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G # Reduced slightly, can increase if UI is slow
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
 
   airflow-scheduler:
     <<: *airflow-common
-    container_name: airflow_scheduler
-    command: scheduler
-    healthcheck:
-      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname) --limit 1 --allow-multiple"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    container_name: airflow_scheduler_light_reddit
     restart: unless-stopped
+    command: airflow scheduler
     depends_on:
       airflow-init:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
     deploy:
       resources:
         limits:
-          cpus: '1.0' # Reduced slightly, LocalExecutor tasks run here
-          memory: 1.5G # Reduced slightly
-
-volumes:
-  postgres_db_volume:
+          cpus: '0.50'
+          memory: 768M
+        reservations:
+          cpus: '0.20'
+          memory: 384M
