@@ -10,3 +10,10 @@ def connect_reddit(client_id,  client_secret, user_agent) -> Reddit:
     except Exception as e:
         print(e)
         sys.exit(1)
+
+def extract_posts(reddit_instance, subreddit, time, limit=None):
+    subreddit = reddit_instance.subreddit(subreddit)
+    posts = subreddit.top(time_filter=time_filter, limit= limit)
+    posts_lists = []
+    
+    print(posts)
